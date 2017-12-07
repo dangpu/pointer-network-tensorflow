@@ -4,7 +4,7 @@ from tensorflow.contrib.framework import arg_scope
 from layers import *
 
 class Model(object):
-  def __init__(self, config, 
+  def __init__(self, config,
                inputs, labels, enc_seq_length, dec_seq_length, mask,
                reuse=False, is_critic=False):
     self.task = config.task
@@ -150,11 +150,11 @@ class Model(object):
         self.dec_cell = MultiRNNCell(cells)
 
       self.dec_pred_logits, _, _ = decoder_rnn(
-          self.dec_cell, self.embeded_dec_inputs, 
+          self.dec_cell, self.embeded_dec_inputs,
           self.enc_outputs, self.enc_final_states,
           self.dec_seq_length, self.hidden_dim,
           self.num_glimpse, batch_size, is_train=True,
-          initializer=self.initializer)
+          initializer=self.initializer, dec_targets = self.dec_targets)
       self.dec_pred_prob = tf.nn.softmax(
           self.dec_pred_logits, 2, name="dec_pred_prob")
       self.dec_pred = tf.argmax(

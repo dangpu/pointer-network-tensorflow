@@ -32,7 +32,7 @@ def decoder_rnn(cell, inputs,
                 seq_length, hidden_dim,
                 num_glimpse, batch_size, is_train,
                 end_of_sequence_id=0, initializer=None,
-                max_length=None):
+                max_length=None, dec_targets = None):
   with tf.variable_scope("decoder_rnn") as scope:
     def attention(ref, query, with_softmax, scope="attention"):
       with tf.variable_scope(scope):
@@ -55,17 +55,21 @@ def decoder_rnn(cell, inputs,
           return scores
 
     def glimpse(ref, query, scope="glimpse"):
-      p = attention(ref, query, with_softmax=True, scope=scope)
+      p = attention(ref, query, with_softmax=True, seq_length=seq_length, scope=scope)
       alignments = tf.expand_dims(p, 2)
       return tf.reduce_sum(alignments * ref, [1])
 
-    def output_fn(ref, query, num_glimpse):
+    def output_fn(ref, query, mask, num_glimpse):
       if query is None:
         return tf.zeros([max_length], tf.float32) # only used for shape inference
       else:
         for idx in range(num_glimpse):
           query = glimpse(ref, query, "glimpse_{}".format(idx))
-        return attention(ref, query, with_softmax=False, scope="attention")
+        if mask is not None:
+          return attention(ref, query, with_softmax=False, scope="attention") - 1000000 * mask
+        else:
+          return attention(ref, query, with_softmax=False, scope="attention")
+
 
     def input_fn(sampled_idx):
       return tf.stop_gradient(
@@ -77,7 +81,7 @@ def decoder_rnn(cell, inputs,
       maximum_length = tf.convert_to_tensor(max_length, tf.int32)
 
       def decoder_fn(time, cell_state, cell_input, cell_output, context_state):
-        cell_output = output_fn(enc_outputs, cell_output, num_glimpse)
+        cell_output = output_fn(ref=enc_outputs, query=cell_output, num_glimpse=num_glimpse, mask=None)
         if cell_state is None:
           cell_state = enc_final_states
           next_input = cell_input
@@ -97,11 +101,32 @@ def decoder_rnn(cell, inputs,
                             sequence_length=seq_length, scope=scope)
 
     if is_train:
-      transposed_outputs = tf.transpose(outputs, [1, 0, 2])
-      fn = lambda x: output_fn(enc_outputs, x, num_glimpse)
-      outputs = tf.transpose(tf.map_fn(fn, transposed_outputs), [1, 0, 2])
+      transposed_outputs = tf.transpose(outputs, [1, 0, 2])   # seq_length * batch_size * hidden
+      transposed_masks = mask(dec_targets, seq_length)    # seq_length * batch-size * seq_length
+      fn = lambda x,y: output_fn(enc_outputs, x, y, num_glimpse)
+      outputs = tf.transpose(tf.map_fn(fn, transposed_outputs, transposed_masks), [1, 0, 2])
 
-    return outputs, final_state, final_context_state
+    return outputs, final_state, final_context_state     # outputs: seq_length * batch_size * seq_length
+
+def mask(dec_targets, seq_length):
+    #根据dec_targets, 计算每一步中哪些点已经走过，生成mask
+    with tf.Session() as sess:
+        array_dec_targets = sess.run(tf.one_hot(dec_targets, seq_length))  #numpy array, batch_size * seq_length * seq_length
+        list_dec_targets = array_dec_targets.tolist()   #list, batch_size * seq_length * seq_length
+
+    for i,targets in enumerate(list_dec_targets):
+        for j in range(len(targets)):
+            if j > 0:
+                # 已经走过的点，置1
+                targets[j] = map(lambda x,y: x+y, targets[j-1], targets[j])
+            if j == 0:
+                targets[j] = [0] * seq_length
+
+    with tf.Session() as sess:
+        mask = tf.convert_to_tensor(list_dec_targets)
+        # 和外部query的shape保持一致
+        transposed_mask = tf.transpose(mask, [1,0,2])   #  seq_length * batch_size, seq_length
+    return transposed_mask
 
 def trainable_initial_state(batch_size, state_size,
                             initializer=None, name="initial_state"):
@@ -128,7 +153,7 @@ def trainable_initial_state(batch_size, state_size,
                                flat_sequence=tiled_states)
 
 def index_matrix_to_pairs(index_matrix):
-  # [[3,1,2], [2,3,1]] -> [[[0, 3], [1, 1], [2, 2]], 
+  # [[3,1,2], [2,3,1]] -> [[[0, 3], [1, 1], [2, 2]],
   #                        [[0, 2], [1, 3], [2, 1]]]
   replicated_first_indices = tf.range(tf.shape(index_matrix)[0])
   rank = len(index_matrix.get_shape())
