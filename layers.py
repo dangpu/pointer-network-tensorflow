@@ -133,9 +133,9 @@ def trainable_initial_state(batch_size, state_size,
   flat_state_size = nest.flatten(state_size)
 
   if not initializer:
-    flat_initializer = tuple(tf.zeros_initializer for _ in flat_state_size)
+    flat_initializer = tuple(tf.zeros_initializer() for _ in flat_state_size)
   else:
-    flat_initializer = tuple(tf.zeros_initializer for initializer in flat_state_size)
+    flat_initializer = tuple(tf.zeros_initializer() for initializer in flat_state_size)
 
   names = ["{}_{}".format(name, i) for i in xrange(len(flat_state_size))]
   tiled_states = []
@@ -143,7 +143,8 @@ def trainable_initial_state(batch_size, state_size,
   for name, size, init in zip(names, flat_state_size, flat_initializer):
     shape_with_batch_dim = [1, size]
     initial_state_variable = tf.get_variable(
-        name, shape=shape_with_batch_dim, initializer=init())
+        #name, shape=shape_with_batch_dim, initializer=init())
+        name, initializer=init(shape_with_batch_dim))
 
     tiled_state = tf.tile(initial_state_variable,
                           [batch_size, 1], name=(name + "_tiled"))
@@ -159,6 +160,6 @@ def index_matrix_to_pairs(index_matrix):
   rank = len(index_matrix.get_shape())
   if rank == 2:
     replicated_first_indices = tf.tile(
-        tf.expand_dims(replicated_first_indices, dim=1),
+        tf.expand_dims(replicated_first_indices, axis=1),
         [1, tf.shape(index_matrix)[1]])
   return tf.stack([replicated_first_indices, index_matrix], axis=rank)
