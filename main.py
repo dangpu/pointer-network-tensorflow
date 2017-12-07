@@ -7,6 +7,7 @@ from config import get_config
 from utils import prepare_dirs_and_logger, save_config
 
 config = None
+import os
 
 def main(_):
   prepare_dirs_and_logger(config)
@@ -23,10 +24,10 @@ def main(_):
   tf.set_random_seed(config.random_seed)
 
   trainer = Trainer(config, rng)
-  save_config(config.model_dir, config)
 
   if config.is_train:
     trainer.train()
+    save_config(config.model_dir, config)
   else:
     if not config.load_path:
       raise Exception("[!] You should specify `load_path` to load a pretrained model")

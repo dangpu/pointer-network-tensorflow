@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os
 import numpy as np
 from tqdm import trange
@@ -7,6 +8,10 @@ from tensorflow.contrib.framework.python.ops import arg_scope
 from model import Model
 from utils import show_all_variables
 from data_loader import TSPDataLoader
+
+import sys
+reload(sys)
+sys.setdefaultencoding('utf-8')
 
 class Trainer(object):
   def __init__(self, config, rng):
@@ -39,7 +44,8 @@ class Trainer(object):
     show_all_variables()
 
   def build_session(self):
-    self.saver = tf.train.Saver()
+    self.saver = tf.train.Saver(max_to_keep = 100,
+            keep_checkpoint_every_n_hours = 2)
     self.summary_writer = tf.summary.FileWriter(self.model_dir)
 
     sv = tf.train.Supervisor(logdir=self.model_dir,
@@ -47,7 +53,7 @@ class Trainer(object):
                              saver=self.saver,
                              summary_op=None,
                              summary_writer=self.summary_writer,
-                             save_summaries_secs=300,
+                             save_summaries_secs=600,
                              save_model_secs=self.checkpoint_secs,
                              global_step=self.model.global_step)
 
@@ -79,13 +85,18 @@ class Trainer(object):
 
   def test(self):
     tf.logging.info("Testing starts...")
+    
+    if self.config.load_model != '':
+        tf.logging.info("Restoring Pre-trained Model {}/{}".format(self.model_dir,self.config.load_model))
+        self.saver.restore(sess, os.path.join(self.model_dir,self.config.load_model))
+
     self.data_loader.run_input_queue(self.sess)
 
-    for idx in range(10):
+    for idx in range(self.config.test_num / self.config.batch_size + 1):
       self._test(None)
 
     self.data_loader.stop_input_queue()
-
+  
   def _test(self, summary_writer):
     fetch = {
         'loss': self.model.total_inference_loss,
@@ -104,8 +115,29 @@ class Trainer(object):
     if summary_writer:
       summary_writer.add_summary(result['summary'], result['step'])
 
+    # write result into output_file
+    self._write_pred(result,self._get_path(result['step']))
+
   def _get_summary_writer(self, result):
     if result['step'] % self.log_step == 0:
       return self.summary_writer
     else:
       return None
+
+  def _write_pred(self,result,path):
+      l = len(result['pred'])
+      t,f = 0,0
+      tf.logging.info("write into path {}".format(path))
+      with open(path,'a') as w:
+        w.write('\n\n'.join(["{}\n{}\n{}".format(result['pred'][i],result['true'][i],np.array_equal(result['pred'][i], result['true'][i])) for i in range(l)]) + '\n\n')
+        """
+        t = sum([1 for i in range(l) if np.array_equal(result['pred'][i], result['true'][i])])
+        f = sum([1 for i in range(l) if not np.array_equal(result['pred'][i], result['true'][i])])
+
+        w.write('\n\n%d %d %d %.3f\n'%(t,f,t+f,float(t)/(t+f+0.001)))
+        """
+      
+      return True
+
+  def _get_path(self,step):
+      return os.path.join(self.config.log_dir, self.config.model_name, "output_step_%s.txt"%step)
