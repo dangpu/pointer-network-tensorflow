@@ -4,6 +4,10 @@ from tensorflow.contrib import layers
 from tensorflow.contrib import seq2seq
 from tensorflow.python.util import nest
 
+import sys
+reload(sys)
+sys.setdefaultencoding('utf-8')
+
 try:
   from tensorflow.contrib.layers.python.layers import utils
 except:
@@ -48,6 +52,10 @@ def decoder_rnn(cell, inputs,
         tiled_encoded_Query = tf.tile(
             encoded_query, [1, tf.shape(encoded_ref)[1], 1], name="tiled_encoded_query")
         scores = tf.reduce_sum(v * tf.tanh(encoded_ref + encoded_query), [-1])
+        
+        #paddings = tf.constant([[0,0],[0,hidden_dim-max_length]])
+        #padding_scores = tf.pad(scores, paddings, 'CONSTANT')
+        #tf.reshape(padding_scores, shape=[batch_size, hidden_dim])
 
         if with_softmax:
           return tf.nn.softmax(scores)
@@ -55,18 +63,20 @@ def decoder_rnn(cell, inputs,
           return scores
 
     def glimpse(ref, query, scope="glimpse"):
-      p = attention(ref, query, with_softmax=True, seq_length=seq_length, scope=scope)
+      p = attention(ref, query, with_softmax=True, scope=scope)
       alignments = tf.expand_dims(p, 2)
       return tf.reduce_sum(alignments * ref, [1])
 
     def output_fn(ref, query, mask, num_glimpse):
       if query is None:
+        #print "query is none" 
         return tf.zeros([max_length], tf.float32) # only used for shape inference
       else:
         for idx in range(num_glimpse):
           query = glimpse(ref, query, "glimpse_{}".format(idx))
         if mask is not None:
           return attention(ref, query, with_softmax=False, scope="attention") - 1000000 * mask
+          #return attention(ref, query, with_softmax=False, scope="attention")
         else:
           return attention(ref, query, with_softmax=False, scope="attention")
 
@@ -96,36 +106,30 @@ def decoder_rnn(cell, inputs,
           lambda: done)
         return (done, cell_state, next_input, cell_output, context_state)
 
+    print "before dynamic_rnn_decode"
     outputs, final_state, final_context_state = \
         dynamic_rnn_decoder(cell, decoder_fn, inputs=inputs,
                             sequence_length=seq_length, scope=scope)
+    print "after dynamic_rnn_decode"
 
     if is_train:
       transposed_outputs = tf.transpose(outputs, [1, 0, 2])   # seq_length * batch_size * hidden
-      transposed_masks = mask(dec_targets, seq_length)    # seq_length * batch-size * seq_length
-      fn = lambda x,y: output_fn(enc_outputs, x, y, num_glimpse)
-      outputs = tf.transpose(tf.map_fn(fn, transposed_outputs, transposed_masks), [1, 0, 2])
+      transposed_masks = mask(dec_targets, max_length)    # seq_length * batch-size * max_length
+      fn = lambda x: output_fn(enc_outputs, x[0], x[1], num_glimpse)
+      outputs = tf.transpose(tf.map_fn(fn, (transposed_outputs, transposed_masks), dtype=tf.float32), [1, 0, 2])
 
     return outputs, final_state, final_context_state     # outputs: seq_length * batch_size * seq_length
 
 def mask(dec_targets, seq_length):
-    #根据dec_targets, 计算每一步中哪些点已经走过，生成mask
+    # acording to dec_targets, gen mask,  which nodes has visited and will not to be visited again
     with tf.Session() as sess:
-        array_dec_targets = sess.run(tf.one_hot(dec_targets, seq_length))  #numpy array, batch_size * seq_length * seq_length
-        list_dec_targets = array_dec_targets.tolist()   #list, batch_size * seq_length * seq_length
-
-    for i,targets in enumerate(list_dec_targets):
-        for j in range(len(targets)):
-            if j > 0:
-                # 已经走过的点，置1
-                targets[j] = map(lambda x,y: x+y, targets[j-1], targets[j])
-            if j == 0:
-                targets[j] = [0] * seq_length
-
-    with tf.Session() as sess:
-        mask = tf.convert_to_tensor(list_dec_targets)
-        # 和外部query的shape保持一致
-        transposed_mask = tf.transpose(mask, [1,0,2])   #  seq_length * batch_size, seq_length
+        onehot_dec_targets = tf.one_hot(dec_targets, seq_length)  # batch_size * seq_length * seq_length
+        mask = tf.cumsum(onehot_dec_targets, axis=1, exclusive=True) # cumulate add front subtensor, e.g. b[i] = b[i] + b[i-1]
+        shape = tf.shape(dec_targets)
+        mask = tf.zeros([shape[0], shape[1], seq_length], tf.float32)
+        # whose shape is equal with query
+        transposed_mask = tf.transpose(mask, [1,0,2])   #  seq_length * batch_size * seq_length
+        print sess.run(tf.shape(transposed_mask))
     return transposed_mask
 
 def trainable_initial_state(batch_size, state_size,

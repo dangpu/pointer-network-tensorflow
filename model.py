@@ -94,6 +94,7 @@ class Model(object):
 
   def _build_model(self):
     tf.logging.info("Create a model..")
+
     self.global_step = tf.Variable(0, trainable=False)
 
     input_embed = tf.get_variable(
@@ -148,18 +149,20 @@ class Model(object):
       if self.num_layers > 1:
         cells = [self.dec_cell] * self.num_layers
         self.dec_cell = MultiRNNCell(cells)
+      
+      #print "self.hidden_dim is %d" % self.hidden_dim
+      #print "self.max_dec_length is %d" % self.max_dec_length
 
       self.dec_pred_logits, _, _ = decoder_rnn(
           self.dec_cell, self.embeded_dec_inputs,
           self.enc_outputs, self.enc_final_states,
           self.dec_seq_length, self.hidden_dim,
           self.num_glimpse, batch_size, is_train=True,
-          initializer=self.initializer, dec_targets = self.dec_targets)
+          initializer=self.initializer, max_length=self.max_dec_length+int(self.use_terminal_symbol), dec_targets = self.dec_targets)
       self.dec_pred_prob = tf.nn.softmax(
           self.dec_pred_logits, 2, name="dec_pred_prob")
       self.dec_pred = tf.argmax(
           self.dec_pred_logits, 2, name="dec_pred")
-
     with tf.variable_scope("decoder", reuse=True):
       self.dec_inference_logits, _, _ = decoder_rnn(
           self.dec_cell, self.first_decoder_input,
@@ -167,7 +170,7 @@ class Model(object):
           self.dec_seq_length, self.hidden_dim,
           self.num_glimpse, batch_size, is_train=False,
           initializer=self.initializer,
-          max_length=self.max_dec_length + int(self.use_terminal_symbol))
+          max_length=self.max_dec_length+int(self.use_terminal_symbol))
       self.dec_inference_prob = tf.nn.softmax(
           self.dec_inference_logits, 2, name="dec_inference_logits")
       self.dec_inference = tf.argmax(
